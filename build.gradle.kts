@@ -73,7 +73,7 @@ dependencies {
     testImplementation("org.mockito:mockito-core:1.10.19")
     testImplementation("com.launchdarkly:test-helpers:2.1.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:${Versions.okhttp}")
-    testImplementation("com.google.guava:guava:33.5.0-jre")
+    testImplementation("com.google.guava:guava:31.1-jre")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.hamcrest:hamcrest-all:1.3")
 }
