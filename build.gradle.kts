@@ -1,0 +1,238 @@
+import java.time.Duration
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.external.javadoc.CoreJavadocOptions
+import org.gradle.external.javadoc.StandardJavadocDocletOptions
+
+buildscript {
+    repositories {
+        mavenCentral()
+        mavenLocal()
+    }
+}
+
+plugins {
+    java
+    `java-library`
+    checkstyle
+    jacoco
+    signing
+    `maven-publish`
+    idea
+    id("org.jetbrains.kotlin.jvm") version "2.1.21"
+    id("io.github.gradle-nexus.publish-plugin") version "1.3.0" apply false
+}
+
+// Note about org.jetbrains.kotlin.jvm in the plugins block:
+// This project is pure Java, but the Kotlin plugin must stay applied. With it applied,
+// maven-publish writes the resolved "okhttp-jvm" coordinates into our pom instead of
+// "okhttp". That matters because OkHttp 5.x publishes "okhttp" itself as an empty
+// Kotlin Multiplatform stub whose pom does not reference okhttp-jvm; only Gradle
+// consumers (via module metadata) can resolve it to the real JVM artifact. A pom of
+// ours pointing at "okhttp" would therefore give Maven-only consumers no OkHttp
+// classes at all. (Our Gradle module metadata still declares "okhttp", which Gradle
+// consumers resolve normally.)
+// Keep this plugin version matched to the Kotlin version OkHttp is built with (see
+// the kotlin-stdlib dependency in okhttp-jvm's pom for the OkHttp version above).
+// kotlin.stdlib.default.dependency=false in gradle.properties prevents the plugin
+// from adding kotlin-stdlib to our own pom.
+
+repositories {
+    mavenLocal()
+    // Before LaunchDarkly release artifacts get synced to Maven Central they are here along with snapshots:
+    maven { url = uri("https://oss.sonatype.org/content/groups/public/") }
+    mavenCentral()
+}
+
+// Apply nexus-publish plugin only when this is the root project
+// (contract tests include this as a subproject, which would fail)
+if (project == rootProject) {
+    apply(plugin = "io.github.gradle-nexus.publish-plugin")
+}
+
+base {
+    group = "com.launchdarkly"
+    archivesBaseName = "okhttp-eventsource"
+    version = version
+}
+
+java {
+    withJavadocJar()
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+object Versions {
+    const val launchdarklyLogging = "1.1.1"
+    const val okhttp = "5.5.1"
+}
+
+dependencies {
+    api("com.launchdarkly:launchdarkly-logging:${Versions.launchdarklyLogging}")
+    api("com.squareup.okhttp3:okhttp:${Versions.okhttp}")
+    testImplementation("org.mockito:mockito-core:1.10.19")
+    testImplementation("com.launchdarkly:test-helpers:2.1.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:${Versions.okhttp}")
+    testImplementation("com.google.guava:guava:33.5.0-jre")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.hamcrest:hamcrest-all:1.3")
+}
+
+checkstyle {
+    toolVersion = "9.3"
+    configFile = file("${project.rootDir}/checkstyle.xml")
+}
+
+tasks.jar.configure {
+    manifest {
+        attributes(mapOf("Implementation-Version" to project.version))
+    }
+}
+
+tasks.javadoc.configure {
+    // Force the Javadoc build to fail if there are any Javadoc warnings. See: https://discuss.gradle.org/t/javadoc-fail-on-warning/18141/3
+    // See JDK-8200363 (https://bugs.openjdk.java.net/browse/JDK-8200363)
+    // for information about the -Xwerror option.
+    (options as CoreJavadocOptions).addStringOption("Xwerror")
+
+    // The following should allow hyperlinks to com.launchdarkly.logging classes to go to
+    // the correct external URLs
+    if (options is StandardJavadocDocletOptions) {
+        (options as StandardJavadocDocletOptions).links(
+            "https://javadoc.io/doc/com.launchdarkly/launchdarkly-logging/${Versions.launchdarklyLogging}"
+        )
+    }
+}
+
+tasks.test.configure {
+    testLogging {
+        events("passed", "skipped", "failed", "standardOut", "standardError")
+        showStandardStreams = true
+        exceptionFormat = TestExceptionFormat.FULL
+    }
+}
+
+tasks.jacocoTestReport.configure {
+    reports {
+        xml.required.set(true)
+        csv.required.set(true)
+        html.required.set(true)
+    }
+}
+
+tasks.jacocoTestCoverageVerification.configure {
+    // See notes in CONTRIBUTING.md on code coverage. Unfortunately we can't configure line-by-line code
+    // coverage overrides within the source code itself, because Jacoco operates on bytecode.
+    violationRules {
+        val knownMissedLinesForMethods = mapOf(
+            // The key for each of these items is the complete method signature minus the "com.launchdarkly.eventsource." prefix.
+            "EventParser.IncrementalMessageDataInputStream.read()" to 7,
+            "EventParser.IncrementalMessageDataInputStream.read(byte[])" to 1,
+            "EventParser.IncrementalMessageDataInputStream.read(byte[], int, int)" to 2,
+            "EventParser.IncrementalMessageDataInputStream.canGetNextChunk()" to 3,
+            "EventSource.awaitClosed(long, java.util.concurrent.TimeUnit)" to 2,
+            "EventSource.awaitClosed(java.time.Duration)" to 1,
+            "Helpers.utf8ByteArrayOutputStreamToString(java.io.ByteArrayOutputStream)" to 2,
+            "HttpConnectStrategy.defaultTrustManager()" to 2,
+            "HttpConnectStrategy.Client.awaitClosed(long)" to 1,
+            "HttpConnectStrategy.Client.createHttpClient()" to 2,
+            "MessageEvent.getData()" to 2,
+            "ModernTLSSocketFactory.createSocket(java.lang.String, int)" to 1,
+            "ModernTLSSocketFactory.createSocket(java.lang.String, int, java.net.InetAddress, int)" to 1,
+            "ModernTLSSocketFactory.createSocket(java.net.InetAddress, int)" to 1,
+            "ModernTLSSocketFactory.createSocket(java.net.InetAddress, int, java.net.InetAddress, int)" to 1,
+            "ModernTLSSocketFactory.createSocket(java.net.Socket, java.lang.String, int, boolean)" to 1,
+            "ModernTLSSocketFactory.getDefaultCipherSuites()" to 1,
+            "ModernTLSSocketFactory.getSupportedCipherSuites()" to 1,
+            "background.BackgroundEventSource.dispatchEvent(com.launchdarkly.eventsource.StreamEvent)" to 3
+            )
+        
+        knownMissedLinesForMethods.forEach { (signature, maxMissedLines) ->
+            if (maxMissedLines > 0) {  // < 0 means skip entire method
+                rule {
+                    element = "METHOD"
+                    includes = listOf("com.launchdarkly.eventsource." + signature)
+                    limit {
+                        counter = "LINE"
+                        value = "MISSEDCOUNT"
+                        maximum = maxMissedLines.toBigDecimal()
+                    }
+                }
+            }
+        }
+        
+        // General rule that we should expect 100% test coverage; exclude any methods that have overrides above
+        rule {
+            element = "METHOD"
+            limit {
+                counter = "LINE"
+                value = "MISSEDCOUNT"
+                maximum = 0.toBigDecimal()
+            }
+            excludes = knownMissedLinesForMethods.map { (signature, maxMissedLines) ->
+                "com.launchdarkly.eventsource." + signature }
+        }
+    }
+}
+
+idea {
+    module {
+        isDownloadJavadoc = true
+        isDownloadSources = true
+    }
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+
+            groupId = "com.launchdarkly"
+            artifactId = "okhttp-eventsource"
+
+            pom {
+                name.set("okhttp-eventsource")
+                description.set("EventSource Implementation built on OkHttp")
+                url.set("https://github.com/launchdarkly/okhttp-eventsource")
+                licenses {
+                    license {
+                        name.set("The Apache License, Version 2.0")
+                        url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
+                    }
+                }
+                developers {
+                    developer {
+                        name.set("LaunchDarkly SDK Team")
+                        email.set("sdks@launchdarkly.com")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:git://github.com/launchdarkly/okhttp-eventsource.git")
+                    developerConnection.set("scm:git:ssh:git@github.com:launchdarkly/okhttp-eventsource.git")
+                    url.set("https://github.com/launchdarkly/okhttp-eventsource")
+                }
+            }
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
+}
+
+// Only configure nexus publishing when this is the root project
+if (project == rootProject) {
+    configure<io.github.gradlenexus.publishplugin.NexusPublishExtension> {
+        clientTimeout.set(Duration.ofMinutes(2)) // we've seen extremely long delays in creating repositories
+        repositories {
+            sonatype {
+                nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+                snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+            }
+        }
+    }
+}
+
+signing {
+    setRequired({ findProperty("skipSigning") != "true" })
+    sign(publishing.publications["mavenJava"])
+}
